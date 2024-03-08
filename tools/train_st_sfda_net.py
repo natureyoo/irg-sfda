@@ -202,7 +202,7 @@ def process_pseudo_label(proposals_rpn_k, cur_threshold, proposal_type, psedo_la
     return list_instances, num_proposal_output
 
 @torch.no_grad()
-def update_teacher_model(model_student, model_teacher, keep_rate=0.996, except_backbone=False):
+def update_teacher_model(model_student, model_teacher, keep_rate=0.996, except_backbone=False, first_update=False):
     if comm.get_world_size() > 1:
         student_model_dict = {
             key[7:]: value for key, value in model_student.state_dict().items()
@@ -216,10 +216,13 @@ def update_teacher_model(model_student, model_teacher, keep_rate=0.996, except_b
             if except_backbone and "backbone" in key:
                 new_teacher_dict[key] = value
             else:
-                new_teacher_dict[key] = (
-                    student_model_dict[key] *
-                    (1 - keep_rate) + value * keep_rate
-                )
+                if first_update:
+                    new_teacher_dict[key] = student_model_dict[key]
+                else:
+                    new_teacher_dict[key] = (
+                        student_model_dict[key] *
+                        (1 - keep_rate) + value * keep_rate
+                    )
         else:
             raise Exception("{} is not found in student model".format(key))
 
@@ -321,6 +324,7 @@ def train_sfda(cfg, model_student, model_teacher, resume=False):
     writers = default_writers(cfg.OUTPUT_DIR, max_sf_da_iter) if comm.is_main_process() else []
 
     model_teacher.eval()
+    first_update = True
     # results, cls_names, cls_aps = test_sfda(cfg, model_teacher)
     # wandb_log = {"teacher-{}".format(name): ap for name, ap in zip(cls_names, cls_aps)}
     # wandb_log["teacher-AP"] = results['bbox']['AP']
@@ -376,7 +380,8 @@ def train_sfda(cfg, model_student, model_teacher, resume=False):
                 periodic_checkpointer.step(iteration)
 
                 if iters_after_start % cfg.ADAPT.EMA_PERIOD == 0:
-                    new_teacher_dict = update_teacher_model(model_student, model_teacher, keep_rate=cfg.ADAPT.EMA_RATIO, except_backbone=cfg.ADAPT.ONLY_HEAD)
+                    new_teacher_dict = update_teacher_model(model_student, model_teacher, keep_rate=cfg.ADAPT.EMA_RATIO, except_backbone=cfg.ADAPT.ONLY_HEAD, first_update=first_update)
+                    first_update = False
                     model_teacher.load_state_dict(new_teacher_dict)
                     model_teacher.eval()
                     print("Teacher model testing@", epoch)
