@@ -527,6 +527,7 @@ _C.SOLVER = CN()
 _C.SOLVER.LR_SCHEDULER_NAME = "WarmupMultiStepLR"
 
 _C.SOLVER.MAX_ITER = 40000
+_C.SOLVER.TOTAL_EPOCH = 10
 
 _C.SOLVER.BASE_LR = 0.001
 
@@ -649,3 +650,7 @@ _C.GLOBAL.HACK = 1.0
 _C.ADAPT = CN()
 _C.ADAPT.CLS = False
 _C.ADAPT.CLS_MATCH = [-1, -1, 0, -1, -1, -1, -1, -1]    # ( 'person', 'rider', 'car', 'truck', 'bus', 'train', 'motorcycle', 'bicycle')
+_C.ADAPT.ONLY_HEAD = False
+_C.ADAPT.EMA_PERIOD = 1000
+_C.ADAPT.EMA_RATIO = 0.9
+_C.ADAPT.PSEUDO_THRESH = 0.7

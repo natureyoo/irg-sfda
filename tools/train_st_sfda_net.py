@@ -163,18 +163,17 @@ def threshold_bbox(proposal_bbox_inst, thres=0.7, proposal_type="roih", synth_in
         new_boxes = Boxes(new_bbox_loc)
 
         if synth_inst is not None:
+            synth_inst = synth_inst.to(new_boxes.device)
             # add synthetic object and boxes and pseudo labeled boxes to instances
-            synth_boxes = Boxes(torch.stack([torch.Tensor(i['bbox']) for i in synth_inst])).to(new_boxes.device)
-            iou = pairwise_iou(new_boxes, synth_boxes)
+            iou = pairwise_iou(new_boxes, synth_inst.gt_boxes)
             non_overlapped = iou.max(dim=1)[0] < iou_thres
-            new_proposal_inst.gt_boxes = Boxes.cat([new_boxes[non_overlapped], synth_boxes])
+            new_proposal_inst.gt_boxes = Boxes.cat([new_boxes[non_overlapped], synth_inst.gt_boxes])
 
             pseudo_labeled_classes = proposal_bbox_inst.pred_classes[valid_map][non_overlapped]
-            synth_classes = torch.Tensor([i['category_id'] for i in synth_inst]).int().to(pseudo_labeled_classes.device)
-            new_proposal_inst.gt_classes = torch.cat([pseudo_labeled_classes, synth_classes])
+            new_proposal_inst.gt_classes = torch.cat([pseudo_labeled_classes, synth_inst.gt_classes])
 
             pseudo_labeled_scores = proposal_bbox_inst.scores[valid_map][non_overlapped]
-            synth_scores = torch.ones(synth_classes.shape).to(pseudo_labeled_scores.device)
+            synth_scores = torch.ones(len(synth_inst)).to(new_boxes.device)
             new_proposal_inst.scores = torch.cat([pseudo_labeled_scores, synth_scores])
         else:
             # add boxes to instances
@@ -203,7 +202,7 @@ def process_pseudo_label(proposals_rpn_k, cur_threshold, proposal_type, psedo_la
     return list_instances, num_proposal_output
 
 @torch.no_grad()
-def update_teacher_model(model_student, model_teacher, keep_rate=0.996):
+def update_teacher_model(model_student, model_teacher, keep_rate=0.996, except_backbone=False):
     if comm.get_world_size() > 1:
         student_model_dict = {
             key[7:]: value for key, value in model_student.state_dict().items()
@@ -214,10 +213,13 @@ def update_teacher_model(model_student, model_teacher, keep_rate=0.996):
     new_teacher_dict = OrderedDict()
     for key, value in model_teacher.state_dict().items():
         if key in student_model_dict.keys():
-            new_teacher_dict[key] = (
-                student_model_dict[key] *
-                (1 - keep_rate) + value * keep_rate
-            )
+            if except_backbone and "backbone" in key:
+                new_teacher_dict[key] = value
+            else:
+                new_teacher_dict[key] = (
+                    student_model_dict[key] *
+                    (1 - keep_rate) + value * keep_rate
+                )
         else:
             raise Exception("{} is not found in student model".format(key))
 
@@ -244,6 +246,26 @@ def visualize_proposals(cfg, batched_inputs, proposals, box_size, proposal_dir, 
             if not os.path.exists(save_path):
                 os.makedirs(save_path)
             cv2.imwrite(save_img_path, vis_img)
+
+
+def visualize_instances(cfg, batched_inputs, pseudo_labels, synth_instances, metadata, thr=0.9, vis_dir='vis'):
+    from detectron2.utils.visualizer import Visualizer
+
+    for input, pseudo, synth in zip(batched_inputs, pseudo_labels, synth_instances):
+        img = input["image_weak"]
+        img = convert_image_to_rgb(img.permute(1, 2, 0), None)
+        # v_gt = Visualizer(img, None)
+        # v_gt = v_gt.overlay_instances(boxes=input["instances"].gt_boxes)
+        # anno_img = v_gt.get_image()
+        v_pred = Visualizer(img, metadata)
+        v_pred = v_pred.draw_instance_pred_synth(pseudo[pseudo.scores > thr], synth)
+        vis_img = v_pred.get_image()
+
+        save_path = os.path.join(cfg.OUTPUT_DIR, vis_dir)
+        save_img_path = os.path.join(cfg.OUTPUT_DIR, vis_dir, input['file_name'].split('/')[-1])
+        if not os.path.exists(save_path):
+            os.makedirs(save_path)
+        cv2.imwrite(save_img_path, vis_img)
 
 
 def test_sfda(cfg, model):
@@ -287,9 +309,10 @@ def train_sfda(cfg, model_student, model_teacher, resume=False):
     #pdb.set_trace()
 
     data_loader = build_detection_train_loader(cfg)
+    metadata = MetadataCatalog.get(cfg.DATASETS.TEST[0])
 
-    total_epochs = 10
-    len_data_loader = len(data_loader.dataset.dataset.dataset)
+    total_epochs = cfg.SOLVER.TOTAL_EPOCH
+    len_data_loader = len(data_loader.dataset.dataset.dataset) // cfg.SOLVER.IMS_PER_BATCH
     start_iter, max_iter = 0, len_data_loader
     max_sf_da_iter = total_epochs*max_iter
     logger.info("Starting training from iteration {}".format(start_iter))
@@ -298,11 +321,11 @@ def train_sfda(cfg, model_student, model_teacher, resume=False):
     writers = default_writers(cfg.OUTPUT_DIR, max_sf_da_iter) if comm.is_main_process() else []
 
     model_teacher.eval()
-    results, cls_names, cls_aps = test_sfda(cfg, model_teacher)
-    wandb_log = {"teacher-{}".format(name): ap for name, ap in zip(cls_names, cls_aps)}
-    wandb_log["teacher-AP"] = results['bbox']['AP']
-    wandb_log["teacher-AP50"] = results['bbox']['AP50']
-    wandb.log(wandb_log, step=0)
+    # results, cls_names, cls_aps = test_sfda(cfg, model_teacher)
+    # wandb_log = {"teacher-{}".format(name): ap for name, ap in zip(cls_names, cls_aps)}
+    # wandb_log["teacher-AP"] = results['bbox']['AP']
+    # wandb_log["teacher-AP50"] = results['bbox']['AP50']
+    # wandb.log(wandb_log, step=0)
 
     start_time = time.perf_counter()
     iters_after_start = 0
@@ -314,6 +337,8 @@ def train_sfda(cfg, model_student, model_teacher, resume=False):
             data_loader = build_detection_train_loader(cfg)
             model_teacher.eval()
             model_student.train()
+            if cfg.ADAPT.ONLY_HEAD:
+                model_student.backbone.requires_grad_(False)
             for data, iteration in zip(data_loader, range(start_iter, max_iter)):
                 storage.iter = iteration
                 iters_after_start += 1
@@ -324,8 +349,8 @@ def train_sfda(cfg, model_student, model_teacher, resume=False):
 
                 # teacher_pseudo_proposals, num_rpn_proposal = process_pseudo_label(teacher_proposals, 0.9, "rpn", "thresholding")
 
-                synth_instances = [d["annotations_synth"] for d in data] if "annotations_synth" in data[0] else None
-                teacher_pseudo_results, num_roih_proposal = process_pseudo_label(teacher_results, 0.9, "roih", "thresholding", synth_instances=synth_instances)
+                synth_instances = [d["instances_synth"] for d in data] if "instances_synth" in data[0] else None
+                teacher_pseudo_results, num_roih_proposal = process_pseudo_label(teacher_results, cfg.ADAPT.PSEUDO_THRESH, "roih", "thresholding", synth_instances=synth_instances)
 
                 loss_dict = model_student(data, cfg, model_teacher, teacher_features, teacher_proposals, teacher_pseudo_results, mode="train")
 
@@ -335,6 +360,8 @@ def train_sfda(cfg, model_student, model_teacher, resume=False):
                 losses.backward()
                 optimizer.step()
                 storage.put_scalar("lr", optimizer.param_groups[0]["lr"], smoothing_hint=False)
+
+                # visualize_instances(cfg, data, teacher_results, synth_instances, metadata, vis_dir='vis')
 
                 if iteration - start_iter > 5 and ((iteration + 1) % 50 == 0 or iteration == max_iter - 1):
                     total_seconds_per_batch = (time.perf_counter() - start_time) / iters_after_start
@@ -348,8 +375,16 @@ def train_sfda(cfg, model_student, model_teacher, resume=False):
 
                 periodic_checkpointer.step(iteration)
 
-            new_teacher_dict = update_teacher_model(model_student, model_teacher, keep_rate=0.9)
-            model_teacher.load_state_dict(new_teacher_dict)
+                if iters_after_start % cfg.ADAPT.EMA_PERIOD == 0:
+                    new_teacher_dict = update_teacher_model(model_student, model_teacher, keep_rate=cfg.ADAPT.EMA_RATIO, except_backbone=cfg.ADAPT.ONLY_HEAD)
+                    model_teacher.load_state_dict(new_teacher_dict)
+                    model_teacher.eval()
+                    print("Teacher model testing@", epoch)
+                    results, cls_names, cls_aps = test_sfda(cfg, model_teacher)
+                    wandb_log = {"teacher-{}".format(name): ap for name, ap in zip(cls_names, cls_aps)}
+                    wandb_log["teacher-AP"] = results['bbox']['AP']
+                    wandb_log["teacher-AP50"] = results['bbox']['AP50']
+                    wandb.log(wandb_log, step=iters_after_start)
 
             # save checkpoint and evaluate every epoch
             model_student.eval()
@@ -358,14 +393,6 @@ def train_sfda(cfg, model_student, model_teacher, resume=False):
             wandb_log = {"student-{}".format(name): ap for name, ap in zip(cls_names, cls_aps)}
             wandb_log["student-AP"] = results['bbox']['AP']
             wandb_log["student-AP50"] = results['bbox']['AP50']
-            wandb.log(wandb_log, step=iters_after_start)
-
-            model_teacher.eval()
-            print("Teacher model testing@", epoch)
-            results, cls_names, cls_aps = test_sfda(cfg, model_teacher)
-            wandb_log = {"teacher-{}".format(name): ap for name, ap in zip(cls_names, cls_aps)}
-            wandb_log["teacher-AP"] = results['bbox']['AP']
-            wandb_log["teacher-AP50"] = results['bbox']['AP50']
             wandb.log(wandb_log, step=iters_after_start)
 
             torch.save(model_teacher.state_dict(), cfg.OUTPUT_DIR + "/model_teacher_{}.pth".format(epoch))
