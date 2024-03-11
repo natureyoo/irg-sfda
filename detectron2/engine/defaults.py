@@ -382,6 +382,9 @@ class DefaultTrainer(TrainerBase):
 
         if cfg.ADAPT.ONLY_HEAD:
             model.backbone.requires_grad_(False)
+        if cfg.ADAPT.CLS:
+            model.roi_heads.box_predictor.extend_classes(cfg.ADAPT.CLS_MATCH)
+            model.to(torch.device(model.device))
 
         self._trainer = (AMPTrainer if cfg.SOLVER.AMP.ENABLED else SimpleTrainer)(
             model, data_loader, optimizer
