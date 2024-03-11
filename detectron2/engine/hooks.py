@@ -503,7 +503,7 @@ class EvalHook(HookBase):
     It is executed every ``eval_period`` iterations and after the last iteration.
     """
 
-    def __init__(self, eval_period, eval_function):
+    def __init__(self, eval_period, eval_function, wandb):
         """
         Args:
             eval_period (int): the period to run `eval_function`. Set to 0 to
@@ -518,8 +518,10 @@ class EvalHook(HookBase):
         """
         self._period = eval_period
         self._func = eval_function
+        self._wandb = wandb
+        self._cls_name = ['person', 'rider', 'car', 'truck', 'bus', 'train', 'motorcycle', 'bicycle']
 
-    def _do_eval(self):
+    def _do_eval(self, next_iter):
         results = self._func()
 
         if results:
@@ -527,15 +529,24 @@ class EvalHook(HookBase):
                 results, dict
             ), "Eval function must return a dict. Got {} instead.".format(results)
 
-            flattened_results = flatten_results_dict(results)
-            for k, v in flattened_results.items():
-                try:
-                    v = float(v)
-                except Exception as e:
-                    raise ValueError(
-                        "[EvalHook] eval_function should return a nested dict of float. "
-                        "Got '{}: {}' instead.".format(k, v)
-                    ) from e
+            _flattened_results = flatten_results_dict(results)
+            flattened_results = {}
+            wandb_log = {}
+            for k, v in _flattened_results.items():
+                if '-' in k:
+                    for cls_n, ap in zip(self._cls_name, v):
+                        wandb_log[cls_n] = ap
+                else:
+                    wandb_log[k.replace('bbox/', '')] = v
+                    flattened_results[k] = v
+            self._wandb.log(wandb_log, step=next_iter),
+                # try:
+                #     v = float(v)
+                # except Exception as e:
+                #     raise ValueError(
+                #         "[EvalHook] eval_function should return a nested dict of float. "
+                #         "Got '{}: {}' instead.".format(k, v)
+                #     ) from e
             self.trainer.storage.put_scalars(**flattened_results, smoothing_hint=False)
 
         # Evaluation may take different time among workers.
@@ -547,7 +558,7 @@ class EvalHook(HookBase):
         if self._period > 0 and next_iter % self._period == 0:
             # do the last eval in after_train
             if next_iter != self.trainer.max_iter:
-                self._do_eval()
+                self._do_eval(next_iter)
 
     def after_train(self):
         # This condition is to prevent the eval from running after a failed training
@@ -556,6 +567,7 @@ class EvalHook(HookBase):
         # func is likely a closure that holds reference to the trainer
         # therefore we clean it to avoid circular reference in the end
         del self._func
+        self._wandb.finish()
 
 
 class PreciseBN(HookBase):

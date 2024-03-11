@@ -41,6 +41,11 @@ from detectron2.evaluation import (
     PascalVOCDetectionEvaluator,
     SemSegEvaluator,
     verify_results,
+    ClipartDetectionEvaluator,
+    WatercolorDetectionEvaluator,
+    CityscapeDetectionEvaluator,
+    FoggyDetectionEvaluator,
+    CityscapeCarDetectionEvaluator,
 )
 import wandb
 
@@ -72,10 +77,20 @@ def build_evaluator(cfg, dataset_name, output_folder=None):
         return CityscapesInstanceEvaluator(dataset_name)
     if evaluator_type == "cityscapes_sem_seg":
         return CityscapesSemSegEvaluator(dataset_name)
-    elif evaluator_type == "pascal_voc":
+    if evaluator_type == "pascal_voc":
         return PascalVOCDetectionEvaluator(dataset_name)
-    elif evaluator_type == "lvis":
+    if evaluator_type == "lvis":
         return LVISEvaluator(dataset_name, output_dir=output_folder)
+    if evaluator_type == "clipart":
+        return ClipartDetectionEvaluator(dataset_name)
+    if evaluator_type == "watercolor":
+        return WatercolorDetectionEvaluator(dataset_name)
+    if evaluator_type == "cityscape":
+        return CityscapeDetectionEvaluator(dataset_name)
+    if evaluator_type == "foggy":
+        return FoggyDetectionEvaluator(dataset_name)
+    if evaluator_type == "cityscape_car":
+        return CityscapeCarDetectionEvaluator(dataset_name)
     if len(evaluator_list) == 0:
         raise NotImplementedError(
             "no Evaluator for the dataset {} with the type {}".format(
@@ -115,9 +130,6 @@ def setup(args):
 
 def main(args):
     cfg = setup(args)
-
-    wandb.init(project="Open-OD-NeurIPS2024")
-    wandb.run.name = cfg.OUTPUT_DIR
 
     if args.eval_only:
         model = Trainer.build_model(cfg)

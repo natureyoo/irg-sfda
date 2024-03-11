@@ -20,6 +20,7 @@ import torch
 from fvcore.nn.precise_bn import get_bn_modules
 from omegaconf import OmegaConf
 from torch.nn.parallel import DistributedDataParallel
+import wandb
 
 import detectron2.data.transforms as T
 from detectron2.checkpoint import DetectionCheckpointer
@@ -378,6 +379,10 @@ class DefaultTrainer(TrainerBase):
         data_loader = self.build_train_loader(cfg)
 
         model = create_ddp_model(model, broadcast_buffers=False)
+
+        if cfg.ADAPT.ONLY_HEAD:
+            model.backbone.requires_grad_(False)
+
         self._trainer = (AMPTrainer if cfg.SOLVER.AMP.ENABLED else SimpleTrainer)(
             model, data_loader, optimizer
         )
@@ -393,7 +398,10 @@ class DefaultTrainer(TrainerBase):
         self.max_iter = cfg.SOLVER.MAX_ITER
         self.cfg = cfg
 
-        self.register_hooks(self.build_hooks())
+        wandb.init(project=cfg.WANDB_PROJECT)
+        wandb.run.name = cfg.OUTPUT_DIR
+
+        self.register_hooks(self.build_hooks(wandb))
 
     def resume_or_load(self, resume=True):
         """
@@ -415,7 +423,7 @@ class DefaultTrainer(TrainerBase):
             # at the next iteration
             self.start_iter = self.iter + 1
 
-    def build_hooks(self):
+    def build_hooks(self, wandb):
         """
         Build a list of default hooks, including timing, evaluation,
         checkpointing, lr scheduling, precise BN, writing events.
@@ -455,7 +463,7 @@ class DefaultTrainer(TrainerBase):
 
         # Do evaluation after checkpointer, because then if it fails,
         # we can use the saved checkpoint to debug.
-        ret.append(hooks.EvalHook(cfg.TEST.EVAL_PERIOD, test_and_save_results))
+        ret.append(hooks.EvalHook(cfg.TEST.EVAL_PERIOD, test_and_save_results, wandb))
 
         if comm.is_main_process():
             # Here the default print/log frequency of each writer is used.
