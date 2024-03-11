@@ -382,9 +382,6 @@ class DefaultTrainer(TrainerBase):
 
         if cfg.ADAPT.ONLY_HEAD:
             model.backbone.requires_grad_(False)
-        if cfg.ADAPT.CLS:
-            model.roi_heads.box_predictor.extend_classes(cfg.ADAPT.CLS_MATCH)
-            model.to(torch.device(model.device))
 
         self._trainer = (AMPTrainer if cfg.SOLVER.AMP.ENABLED else SimpleTrainer)(
             model, data_loader, optimizer
@@ -425,6 +422,11 @@ class DefaultTrainer(TrainerBase):
             # The checkpoint stores the training iteration that just finished, thus we start
             # at the next iteration
             self.start_iter = self.iter + 1
+
+        if self.cfg.ADAPT.CLS:
+            self.model.roi_heads.num_classes = len(self.cfg.ADAPT.CLS_MATCH)
+            self.model.roi_heads.box_predictor.extend_classes(self.cfg.ADAPT.CLS_MATCH)
+            self.model.to(torch.device(self.model.device))
 
     def build_hooks(self, wandb):
         """
