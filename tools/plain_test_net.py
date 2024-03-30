@@ -44,6 +44,7 @@ from detectron2.evaluation import (
     PascalVOCDetectionEvaluator,
     SemSegEvaluator,
     inference_on_dataset,
+    analyze_on_dataset,
     print_csv_format,
     ClipartDetectionEvaluator,
     CityscapeDetectionEvaluator,
@@ -116,14 +117,14 @@ def get_evaluator(cfg, dataset_name, output_folder=None):
     return DatasetEvaluators(evaluator_list)
 
 
-def do_test(cfg, model):
+def do_test(cfg, model, visualize=False):
     results = OrderedDict()
     for dataset_name in cfg.DATASETS.TEST:
         data_loader = build_detection_test_loader(cfg, dataset_name)
         evaluator = get_evaluator(
             cfg, dataset_name, os.path.join(cfg.OUTPUT_DIR, "inference", dataset_name)
         )
-        results_i = inference_on_dataset(model, data_loader, evaluator)
+        results_i = inference_on_dataset(model, data_loader, evaluator, metadata=MetadataCatalog.get(dataset_name), visualize=visualize)
         results[dataset_name] = results_i
         if comm.is_main_process():
             logger.info("Evaluation results for {} in csv format:".format(dataset_name))
@@ -131,6 +132,14 @@ def do_test(cfg, model):
     if len(results) == 1:
         results = list(results.values())[0]
     return results
+
+
+def do_analyze(cfg, model):
+    results = OrderedDict()
+    for dataset_name in cfg.DATASETS.TEST:
+        data_loader = build_detection_test_loader(cfg, dataset_name)
+        class_names = MetadataCatalog.get(dataset_name).thing_classes
+        analyze_on_dataset(model, data_loader, class_names)
 
 
 def setup(args):
@@ -155,7 +164,11 @@ def main(args):
     if args.eval_only:
         DetectionCheckpointer(model, save_dir=cfg.OUTPUT_DIR).load(args.model_dir)
         logger.info("Trained model has been sucessfully loaded")
-        return do_test(cfg, model)
+        return do_test(cfg, model, visualize=True)
+    elif args.analyze_only:
+        DetectionCheckpointer(model, save_dir=cfg.OUTPUT_DIR).load(args.model_dir)
+        logger.info("Trained model has been sucessfully loaded")
+        return do_analyze(cfg, model)
 
 
 if __name__ == "__main__":

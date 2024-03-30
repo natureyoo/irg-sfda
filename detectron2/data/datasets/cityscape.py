@@ -34,11 +34,13 @@ def load_cityscape_instances(dirname: str, split: str, class_names: Union[List[s
         class_names: list or tuple of class names
     """
     with PathManager.open(os.path.join(dirname, "ImageSets", "Main", split + ".txt")) as f:
-        fileids = np.loadtxt(f, dtype=np.str)
+        # fileids = np.loadtxt(f, dtype=np.str)
+        fileids = np.loadtxt(f, dtype='str')
 
     # Needs to read many small annotation files. Makes sense at local
 
     annotation_dirname = PathManager.get_local_path(os.path.join(dirname, "Annotations/"))
+    annotation_synth_dirname = PathManager.get_local_path(os.path.join(dirname, "Annotations_synth/"))
     dicts = []
     for fileid in fileids:
         anno_file = os.path.join(annotation_dirname, fileid + ".xml")
@@ -74,6 +76,17 @@ def load_cityscape_instances(dirname: str, split: str, class_names: Union[List[s
                 {"category_id": class_names.index(cls), "bbox": bbox, "bbox_mode": BoxMode.XYXY_ABS}
             )
         r["annotations"] = instances
+
+        if synthetic:
+            anno_file = os.path.join(annotation_synth_dirname, fileid + ".txt")
+            instances = []
+            for line in open(anno_file).readlines():
+                cls, x1, y1, x2, y2 = line.strip().split(',')
+                cls = cls.split(' ')[-1]
+                bbox = [float(v) for v in [x1, y1, x2, y2]]
+                if cls in CLASS_NAMES:
+                    instances.append({"category_id": CLASS_NAMES.index(cls), "bbox": bbox, "bbox_mode": BoxMode.XYXY_ABS})
+            r["annotations_synth"] = instances
         dicts.append(r)
     return dicts
 

@@ -535,6 +535,38 @@ class Res5ROIHeads(ROIHeads):
         else:
             return instances
 
+    def forward_with_gt_boxes(
+        self, features: Dict[str, torch.Tensor], instances: List[Instances]
+    ) -> List[Instances]:
+        """
+        Use the given boxes in `instances` to produce other (non-box) per-ROI outputs.
+
+        Args:
+            features: same as in `forward()`
+            instances (list[Instances]): instances to predict other outputs. Expect the keys
+                "pred_boxes" and "pred_classes" to exist.
+
+        Returns:
+            instances (Instances):
+                the same `Instances` object, with extra
+                fields such as `gt_boxes`
+        """
+        assert not self.training
+        new_features = {k: torch.Tensor([]).to(features[k].device) for k in features.keys()}
+        device = new_features[self.in_features[0]].device
+        boxes = []
+        for i, instance in enumerate(instances):
+            if instance is not None:
+                for k in new_features.keys():
+                    new_features[k] = torch.cat((new_features[k], features[k][i].unsqueeze(0)), dim=0)
+                boxes.append(instance.gt_boxes.to(device) if instance.has("gt_boxes") else instance.pred_boxes.to(device))
+
+        if len(boxes) > 0:
+            box_features = self._shared_roi_transform([new_features[f] for f in self.in_features], boxes)
+            predictions = self.box_predictor(box_features.mean(dim=[2, 3]))
+            return box_features, predictions
+        else:
+            return None, None
 
 @ROI_HEADS_REGISTRY.register()
 class StandardROIHeads(ROIHeads):

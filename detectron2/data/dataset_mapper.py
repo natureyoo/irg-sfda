@@ -186,8 +186,12 @@ class DatasetMapper:
 
         if not self.is_train:
             # USER: Modify this if you want to keep them for some reason.
-            dataset_dict.pop("annotations", None)
+            # dataset_dict.pop("annotations", None)
             dataset_dict.pop("sem_seg_file_name", None)
+            if "annotations" in dataset_dict:
+                self._transform_annotations(dataset_dict, transforms, image_shape)
+            if "annotations_synth" in dataset_dict:
+                self._transform_annotations(dataset_dict, transforms, image_shape, ann_key="annotations_synth")
             return dataset_dict
 
         if "annotations" in dataset_dict:

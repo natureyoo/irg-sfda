@@ -9,14 +9,14 @@ MODEL:
   ROI_HEADS:
     NUM_CLASSES: 8
   RESNETS:
-    NORM: "FrozenBN" 
+    NORM: "FrozenBN"
     OUT_FEATURES: ["res4"]
 INPUT:
   MIN_SIZE_TRAIN: (600,)
   MIN_SIZE_TEST: 600
 DATASETS:
-  TRAIN: ("cityscape_2007_train_t",)
-  TEST: ("cityscape_2007_test_s_synth",)
+  TRAIN: ("cityscape_2007_train_t_synth",)
+  TEST: ("cityscape_2007_train_t_synth",)
 SOLVER:
   BASE_LR: 0.001
   WEIGHT_DECAY: 0.0001

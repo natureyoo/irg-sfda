@@ -319,7 +319,9 @@ def register_all_cityscape_synthetic(root):
     SPLITS = [
         ("cityscape_car_2007_train_s_synth", "cityscape/VOC2007-synth", "train_s", "cityscape_car"),
         ("cityscape_2007_train_s_synth", "cityscape/VOC2007-synth", "train_s", "cityscape"),
-        ("cityscape_2007_train_t_synth", "cityscape/VOC2007-synth", "train_t", "foggy"),
+        ("cityscape_2007_train_t_synth", "cityscape/VOC2007-foggy-synth", "train_t", "foggy"),
+        ("cityscape_2007_test_s_synth", "cityscape/VOC2007-synth", "test_s", "cityscape"),
+        ("cityscape_2007_test_t_synth", "cityscape/VOC2007-foggy-synth", "test_t", "foggy"),
     ]
     for name, dirname, split, eval_type in SPLITS:
         year = 2007 if "2007" in name else 2012

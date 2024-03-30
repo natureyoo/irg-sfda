@@ -228,6 +228,54 @@ def update_teacher_model(model_student, model_teacher, keep_rate=0.996, except_b
 
     return new_teacher_dict
 
+
+def update_feature_bank(feature_bank, features, predictions=None, gt_classes=None, thr=0.5, max_num=100, device='cuda'):
+    scores, classes = torch.nn.Softmax(dim=1)(predictions[0]).max(dim=1) if predictions is not None else (torch.ones_like(gt_classes).to(device), gt_classes.to(device))
+    for cls in torch.unique(classes):
+        cur_feats = features[(scores > thr) & (classes == cls)].mean(dim=[2,3]).detach()
+        cur_feats /= torch.norm(cur_feats, dim=1, keepdim=True)
+        feature_bank[cls] = torch.cat([feature_bank[cls], cur_feats], dim=0)
+        feature_bank[cls] = feature_bank[cls][-max_num:]
+
+
+def filter_out_noise_feature(features, instances, original_feature_bank, synthetic_feature_bank, thr=0.5):
+    if features is None:
+        return None
+    normalized_features = features.mean(dim=[2,3]) / torch.norm(features.mean(dim=[2,3]), dim=1, keepdim=True)
+    similarity_with_original = torch.zeros((features.size(0), len(original_feature_bank))).to(features.device)
+    similarity_with_synthetic = torch.zeros((features.size(0), len(synthetic_feature_bank))).to(features.device)
+    for cls, feats in enumerate(original_feature_bank):
+        if feats.size(0) == 0:
+            continue
+        cosine_similarity = torch.mm(normalized_features, feats.t())
+        max_similarity, _ = cosine_similarity.max(dim=1)
+        similarity_with_original[:, cls] = max_similarity
+    max_similarity_original, max_cls_original = similarity_with_original.max(dim=1)
+
+    # for cls, feats in enumerate(synthetic_feature_bank):
+    #     if feats.size(0) == 0:
+    #         continue
+    #     cosine_similarity = torch.mm(normalized_features, feats.t())
+    #     max_similarity, _ = cosine_similarity.max(dim=1)
+    #     similarity_with_synthetic[:, cls] = max_similarity
+    # max_similarity_synthetic, max_cls_synthetic = similarity_with_synthetic.max(dim=1)
+
+    gt_classes = [inst.gt_classes for inst in instances if inst is not None]
+    idx = 0
+    filtered_instances = []
+    for i, inst in enumerate(instances):
+        if inst is not None:
+            # gt_classes = inst.gt_classes.to(max_cls_original.device)
+            valid1 = ((inst.gt_classes == 0) | (inst.gt_classes == 2)) & (inst.gt_classes == max_cls_original[idx:idx + len(inst.gt_classes)].cpu())
+            valid2 = (inst.gt_classes != 0) & (inst.gt_classes != 2)
+            filtered_instances.append(inst[valid1 | valid2])
+            idx += len(inst.gt_classes)
+        else:
+            filtered_instances.append(None)
+
+    return filtered_instances
+
+
 def visualize_proposals(cfg, batched_inputs, proposals, box_size, proposal_dir, metadata):
         from detectron2.utils.visualizer import Visualizer
 
@@ -331,6 +379,9 @@ def train_sfda(cfg, model_student, model_teacher, resume=False):
     # wandb_log["teacher-AP50"] = results['bbox']['AP50']
     # wandb.log(wandb_log, step=0)
 
+    original_feature_bank = [torch.Tensor([]).to(model_teacher.device) for _ in range(len(metadata.thing_classes)+1)]
+    synthetic_feature_bank = [torch.Tensor([]).to(model_teacher.device) for _ in range(len(metadata.thing_classes)+1)]
+
     start_time = time.perf_counter()
     iters_after_start = 0
     with EventStorage(start_iter) as storage:
@@ -352,9 +403,22 @@ def train_sfda(cfg, model_student, model_teacher, resume=False):
                     _, teacher_features, teacher_proposals, teacher_results = model_teacher(data, mode="train")
 
                 # teacher_pseudo_proposals, num_rpn_proposal = process_pseudo_label(teacher_proposals, 0.9, "rpn", "thresholding")
+                # teacher_pseudo_results, num_roih_proposal = process_pseudo_label(teacher_results, 0.9, "roih", "thresholding")
 
-                synth_instances = [d["instances_synth"] for d in data] if "instances_synth" in data[0] else None
-                teacher_pseudo_results, num_roih_proposal = process_pseudo_label(teacher_results, cfg.ADAPT.PSEUDO_THRESH, "roih", "thresholding", synth_instances=synth_instances)
+                synth_instances = [d["instances_synth"] if "instances_synth" in d else None for d in data]
+
+                pred_features, pred_predictions = model_teacher.roi_heads.forward_with_gt_boxes(teacher_features, teacher_results)
+                synth_features, synth_predictions = model_teacher.roi_heads.forward_with_gt_boxes(teacher_features, synth_instances)
+
+                update_feature_bank(original_feature_bank, pred_features, predictions=pred_predictions, thr=0.5, max_num=100, device=model_teacher.device)
+
+                filtered_synth_instances = filter_out_noise_feature(synth_features, synth_instances, original_feature_bank, synthetic_feature_bank, thr=0.5)
+                # synth_gt_classes = [inst.gt_classes for inst in synth_instances if inst is not None]
+                # if len(synth_gt_classes) > 0:
+                #     # update_feature_bank(synthetic_feature_bank, synth_features, gt_classes=torch.cat(synth_gt_classes), thr=0.5, max_num=100)
+                #     update_feature_bank(synthetic_feature_bank, synth_features, filtered_synth_instances, gt_classes=torch.cat(synth_gt_classes), thr=0.5, max_num=100)
+                # teacher_pseudo_results, num_roih_proposal = process_pseudo_label(teacher_results, cfg.ADAPT.PSEUDO_THRESH, "roih", "thresholding", synth_instances=synth_instances)
+                teacher_pseudo_results, num_roih_proposal = process_pseudo_label(teacher_results, cfg.ADAPT.PSEUDO_THRESH, "roih", "thresholding", synth_instances=filtered_synth_instances)
 
                 loss_dict = model_student(data, cfg, model_teacher, teacher_features, teacher_proposals, teacher_pseudo_results, mode="train")
 

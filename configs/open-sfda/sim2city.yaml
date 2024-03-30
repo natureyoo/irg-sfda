@@ -16,7 +16,7 @@ INPUT:
   MIN_SIZE_TEST: 600
 DATASETS:
   TRAIN: ("cityscape_car_2007_train_s_synth",)
-  TEST: ("cityscape_2007_test_s",)
+  TEST: ("cityscape_2007_test_s_synth",)
 SOLVER:
   BASE_LR: 0.001
   WEIGHT_DECAY: 0.0001
